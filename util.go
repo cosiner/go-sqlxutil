@@ -117,6 +117,86 @@ type Updater interface {
 	ExecContext(ctx context.Context, ext sqlx.ExtContext) (sql.Result, error)
 }
 
+type queryerWrapper struct {
+	q         Queryer
+	doneHooks []func(err error) error
+}
+
+func WrapQueryer(q Queryer) queryerWrapper {
+	return queryerWrapper{
+		q: q,
+	}
+}
+
+func (w queryerWrapper) Exec(ext sqlx.Ext) error {
+	return w.done(w.q.Exec(ext))
+}
+
+func (w queryerWrapper) ExecContext(ctx context.Context, ext sqlx.ExtContext) error {
+	return w.done(w.q.ExecContext(ctx, ext))
+}
+
+func (w queryerWrapper) OnDone(onDone func(err error) error) queryerWrapper {
+	w.doneHooks = append(w.doneHooks, onDone)
+	return w
+}
+
+func (w queryerWrapper) OnSuccess(onSuccess func() error) queryerWrapper {
+	return w.OnDone(func(err error) error {
+		if err != nil {
+			return err
+		}
+		return onSuccess()
+	})
+}
+
+func (w queryerWrapper) done(err error) error {
+	for _, d := range w.doneHooks {
+		err = d(err)
+	}
+	return err
+}
+
+type updaterWrapper struct {
+	u         Updater
+	doneHooks []func(res sql.Result, err error) (sql.Result, error)
+}
+
+func (w updaterWrapper) Exec(ext sqlx.Ext) (sql.Result, error) {
+	return w.done(w.u.Exec(ext))
+}
+
+func (w updaterWrapper) ExecContext(ctx context.Context, ext sqlx.ExtContext) (sql.Result, error) {
+	return w.done(w.u.ExecContext(ctx, ext))
+}
+
+func (w updaterWrapper) OnDone(onDone func(res sql.Result, err error) (sql.Result, error)) updaterWrapper {
+	w.doneHooks = append(w.doneHooks, onDone)
+	return w
+}
+
+func (w updaterWrapper) OnSuccess(onSuccess func(res sql.Result) (sql.Result, error)) updaterWrapper {
+	return w.OnDone(func(res sql.Result, err error) (sql.Result, error) {
+		if err != nil {
+			return res, err
+		}
+		return onSuccess(res)
+	})
+}
+
+func (w updaterWrapper) done(res sql.Result, err error) (sql.Result, error) {
+	for _, d := range w.doneHooks {
+		res, err = d(res, err)
+	}
+	return res, err
+}
+
+func WrapUpdater(u Updater) updaterWrapper {
+	return updaterWrapper{
+		u: u,
+	}
+}
+
 func OpGet(sql string, ptr interface{}, args ...interface{}) Queryer {
 	return opScan{
 		query:        Get,
