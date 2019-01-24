@@ -112,9 +112,88 @@ type Queryer interface {
 	ExecContext(ctx context.Context, ext sqlx.ExtContext) error
 }
 
+type nopQueryer struct{}
+
+func NewNopQueryer() Queryer                                                    { return nopQueryer{} }
+func (n nopQueryer) Exec(ext sqlx.Ext) error                                    { return nil }
+func (n nopQueryer) ExecContext(ctx context.Context, ext sqlx.ExtContext) error { return nil }
+
+type groupQueryers []Queryer
+
+func GroupQueryers(qs ...Queryer) Queryer { return groupQueryers(qs) }
+func (g groupQueryers) Exec(ext sqlx.Ext) error {
+	for _, q := range g {
+		err := q.Exec(ext)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (g groupQueryers) ExecContext(ctx context.Context, ext sqlx.ExtContext) error {
+	for _, q := range g {
+		err := q.ExecContext(ctx, ext)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type Updater interface {
 	Exec(ext sqlx.Ext) (sql.Result, error)
 	ExecContext(ctx context.Context, ext sqlx.ExtContext) (sql.Result, error)
+}
+
+type groupUpdaters []Updater
+
+func GroupUpdaters(us ...Updater) Updater { return groupUpdaters(us) }
+
+func (g groupUpdaters) Exec(ext sqlx.Ext) (res sql.Result, err error) {
+	for _, u := range g {
+		res, err = u.Exec(ext)
+		if err != nil {
+			return res, err
+		}
+	}
+	if res == nil {
+		res = fakeResult{}
+	}
+	return res, nil
+}
+func (g groupUpdaters) ExecContext(ctx context.Context, ext sqlx.ExtContext) (res sql.Result, err error) {
+	for _, u := range g {
+		res, err = u.ExecContext(ctx, ext)
+		if err != nil {
+			return res, err
+		}
+	}
+	if res == nil {
+		res = fakeResult{}
+	}
+	return res, nil
+}
+
+type fakeResult struct {
+	Affected int64
+	LastId   int64
+}
+
+func (f fakeResult) LastInsertId() (int64, error) {
+	return f.LastId, nil
+}
+
+func (f fakeResult) RowsAffected() (int64, error) {
+	return f.Affected, nil
+}
+
+type nopUpdater struct {
+}
+
+func NewNopUpdater() Updater                               { return nopUpdater{} }
+func (n nopUpdater) Exec(ext sqlx.Ext) (sql.Result, error) { return fakeResult{}, nil }
+func (n nopUpdater) ExecContext(ctx context.Context, ext sqlx.ExtContext) (sql.Result, error) {
+	return fakeResult{}, nil
 }
 
 type queryerWrapper struct {
